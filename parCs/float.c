@@ -14,7 +14,7 @@ int main() {
     {
     #pragma acc parallel loop vector vector_length(32) gang	
     for(int i = 0; i<N;i++)
-       arr[i] = sin(2*M_PI*i/N);
+       arr[i] = sinf(2*M_PI*i/N);
 
 
     #pragma acc parallel loop reduction(+:sum)
