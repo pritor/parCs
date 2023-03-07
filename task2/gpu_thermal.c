@@ -38,14 +38,17 @@ int main(int argc, char** argv) {
 
     int k = 0;
     memcpy(arraynew, array, size * size * sizeof(double));
-    clock_t begin = clock();
-#pragma acc enter data copyin(array[0:realsize], arraynew[0:realsize])
+#pragma acc enter data copyin(array[0:realsize], arraynew[0:realsize], error)
     { 
-        for (; (k < iternum) && (error > accuracy); k++) {
-            error =0;
-
-#pragma acc data present(array, arraynew)   
-#pragma acc parallel loop independent collapse(2) vector vector_length(256) gang num_gangs(128) reduction(max:error)	    
+    	clock_t begin = clock();
+        for (; (k <= iternum) && (error > accuracy); k++) {
+	    if(k%100==0){
+		#pragma	acc kernels async(1)    
+            	error =0;
+		#pragma acc update device(error) async(1)
+		}
+#pragma acc data present(array, arraynew, error)   
+#pragma acc parallel loop independent collapse(2) vector vector_length(256) gang num_gangs(128) reduction(max:error) async(1)	    
             for (int i = 1; i < size - 1; i++) {
                 for (int j = 1; j < size - 1; j++) {
                     arraynew[j + i * (size)] = 0.25 * (array[j + (i + 1) * (size)] + array[j + (i - 1) * (size)] + array[j - 1 + i * (size)] + array[j + 1 + i * (size)]);
@@ -53,17 +56,22 @@ int main(int argc, char** argv) {
                 }
 
             }
-	    
+	    if(k%100==0){
+		#pragma acc update host(error) async(1)
+		#pragma acc wait(1)    
+	    }
 	    double* temp = array;
             array = arraynew;
             arraynew = temp;
         
     
-	}}
-//#pragma acc exit data copyout(error, k)    
+	}
+    
     clock_t end= clock();
-    printf("%d %lf\n", k, error);
     printf("time: %le\n",1.0 * (end-begin)/CLOCKS_PER_SEC);
+    }
+//#pragma acc exit data copyout(error, k)    
+    printf("%d %lf\n", k, error);
     free(array);
     free(arraynew);
 	
