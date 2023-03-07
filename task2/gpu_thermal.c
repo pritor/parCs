@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
-
+#include <time.h>
 
 int main(int argc, char** argv) {
     double accuracy;
@@ -11,6 +11,7 @@ int main(int argc, char** argv) {
     size = atoi(argv[2]);
     iternum = atoi(argv[3]);
 
+    
     double* array = (double*)calloc(size * size, sizeof(double));
     double* arraynew = (double*)calloc(size * size, sizeof(double));
 
@@ -37,12 +38,13 @@ int main(int argc, char** argv) {
 
     int k = 0;
     memcpy(arraynew, array, size * size * sizeof(double));
-#pragma acc enter data copyin(array[0:realsize], arraynew[0:realsize],error)
+    clock_t begin = clock();
+#pragma acc enter data copyin(array[0:realsize], arraynew[0:realsize])
+    { 
         for (; (k < iternum) && (error > accuracy); k++) {
-            error = 0;
+            error =0;
 
-#pragma acc update device(error)
-#pragma acc data present(array, arraynew, error)
+#pragma acc data present(array, arraynew)   
 #pragma acc parallel loop independent collapse(2) vector vector_length(256) gang num_gangs(128) reduction(max:error)	    
             for (int i = 1; i < size - 1; i++) {
                 for (int j = 1; j < size - 1; j++) {
@@ -51,17 +53,20 @@ int main(int argc, char** argv) {
                 }
 
             }
-#pragma acc update host(error)
-            double* temp = array;
+	    
+	    double* temp = array;
             array = arraynew;
             arraynew = temp;
-        }
-   
+        
+    
+	}}
+//#pragma acc exit data copyout(error, k)    
+    clock_t end= clock();
     printf("%d %lf\n", k, error);
-
+    printf("time: %le\n",1.0 * (end-begin)/CLOCKS_PER_SEC);
     free(array);
     free(arraynew);
-
+	
 
     return 0;
 }
