@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
 	    if(k%100==0){
 		#pragma	acc kernels async(1)                                         //обнуление ошибки и перенос её на gpu каждые 100 итераций   
             	error =0;
-		#pragma acc update device(error) async(1)
+		
 		}
 #pragma acc data present(array, arraynew, error)   
 #pragma acc parallel loop independent collapse(2) vector vector_length(256) gang num_gangs(128) reduction(max:error) async(1)	    //основной алгоритм
