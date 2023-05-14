@@ -1,16 +1,19 @@
-#include <stdio.h>
-#include <time.h>
-#include <stdlib.h>
+#include <iostream>
+#include <cstring>
+#include <cmath>
+#include <ctime>
+
 #include <cuda_runtime.h>
 #include <cub/cub.cuh>
+
 ////////////////////////////////////////////////////////////////////////////
 //расчет уравнения теплопроводности по блокам и потокам. Используем j-ый поток и i-ый блок при каждом расчете, принцип с четвертьюсумммой остается тем же
 ////////////////////////////////////////////////////////////////////////////
 __global__ void heat_equation(double* u, double* u_new, int size) {
-    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    size_t j = blockIdx.y * blockDim.y + threadIdx.y;
-
-    if(!((j == 0 || i == 0 || j == size - 1 || i == size - 1))
+    size_t j = blockIdx.x * blockDim.x + threadIdx.x;
+    size_t i = blockIdx.y * blockDim.y + threadIdx.y;
+    if (i * size + j > size * size) return;
+    if(!((j == 0 || i == 0 || j == size - 1 || i == size - 1)))
     {
         u_new[i * size + j] = 0.25 * (u[(i - 1) * size + j] + u[(i + 1) * size + j]+
                                   u[i * size + (j - 1)] + u[i * size + (j + 1)]);
@@ -23,10 +26,26 @@ __global__ void get_error(double* u, double* u_new, double* out, int size)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if(idx>0)
+    if(idx>size*size)
         return;
 
-    out[idx] = fabs(u_new[idx] - u[idx]);
+    out[idx] = std::abs(u_new[idx] - u[idx]);
+}
+
+void printGrid(double* array, int size){
+    for(int i=0;i<size;i++)printf("-");
+    printf("\n");
+    for(int i=0;i<size;i++){
+        for(int j=0;j<size;j++){
+            printf("%lf ", array[j+i*size]);
+
+        }
+        printf("\n");
+        printf("\n");
+    }
+    printf("\n");
+    for(int i=0;i<size;i++) printf("-");
+    printf("\n");
 }
 
 ////////////////////////////////////////////////////////////////////////////
@@ -42,11 +61,19 @@ int main(int argc, char** argv) {
     size = atoi(argv[2]);
     iternum = atoi(argv[3]);
 
+    std::cout << "Parameters: " << std::endl <<
+              "Min error: " << accuracy << std::endl <<
+              "Grid size: " << size << std::endl<<
+              "Maximal number of iteration: " << iternum << std::endl ;
+
+    size_t realsize = size*size;
+
 ////////////////////////////////////////////////////////////////////////////
 //выделение памяти
 ////////////////////////////////////////////////////////////////////////////
     double* arr;
     double* arr_new;
+
     cudaMallocHost(&arr, realsize * sizeof(double));
     cudaMallocHost(&arr_new, realsize * sizeof(double));
 
@@ -62,24 +89,26 @@ int main(int argc, char** argv) {
 
 
     double step = 10.0/(size-1);
-    size_t realsize = size*size;
+
 
 ////////////////////////////////////////////////////////////////////////////
 //расчет граничных условий, начало отсчета тактов
 ////////////////////////////////////////////////////////////////////////////
-    clock_t start = clock();
+
 
     for (int i = 1; i < size-1; i++) {
-        array[i] = array[0] + step * i;
-        array[size * (size - 1) + i] = array[(size - 1) * size] + step*i;
-        array[size * i] = array[0] + step*i;
-        array[(size - 1) + i * size] = array[size - 1] + step * i;
+        arr[i] = arr[0] + step * i;
+        arr[size * (size - 1) + i] = arr[(size - 1) * size] + step*i;
+        arr[size * i] = arr[0] + step*i;
+        arr[(size - 1) + i * size] = arr[size - 1] + step * i;
     }
+    printGrid(arr, size);
+
 ////////////////////////////////////////////////////////////////////////////
 //копируем из рассчитанной матрицы в новую
 ////////////////////////////////////////////////////////////////////////////
-    std::memcpy(arr, arr_new, realsize * sizeof(double));
-    cudaSetDevice(1);
+    std::memcpy(arr_new, arr, realsize * sizeof(double));
+//    cudaSetDevice(1);
 ////////////////////////////////////////////////////////////////////////////
 //объявление указателей под матрицы на устройстве, матрицы для ошибок  и буфер, а также последующее выделение памяти для них на устройстве
 ////////////////////////////////////////////////////////////////////////////
@@ -89,9 +118,9 @@ int main(int argc, char** argv) {
     cudaError_t cudaStatus_1 = cudaMalloc((void**)(&Matrix), sizeof(double) * realsize);
     cudaError_t cudaStatus_2 = cudaMalloc((void**)(&MatrixNew), sizeof(double) * realsize);
     cudaMalloc((void**)&device_error, sizeof(double));
-    cudaStatus_1 = cudaMalloc((void**)&error_matrix, sizeof(double) * realsize);
+    cudaError_t cudaStatus_3 = cudaMalloc((void**)&error_matrix, sizeof(double) * realsize);
 
-    if (cudaStatus_1 != 0 || cudaStatus_2 != 0)
+    if (cudaStatus_1 != 0 || cudaStatus_2 != 0 || cudaStatus_3 != 0)
     {
         std::cout << "Memory allocation error" << std::endl;
         return -1;
@@ -116,23 +145,21 @@ int main(int argc, char** argv) {
 //следующей же строкой - выделение памяти
 ////////////////////////////////////////////////////////////////////////////
     cub::DeviceReduce::Max(error_temp, temp_size, error_matrix, device_error, realsize);
-    cudaMalloc((&error_temp), temp_size);
+    cudaMalloc((void**)&error_temp, temp_size);
 ////////////////////////////////////////////////////////////////////////////
 //создание графа
 ////////////////////////////////////////////////////////////////////////////
     int k = 0;
 
     double* error;
-    cudaMallocHost(&error, sizeof(double);
+    cudaMallocHost(&error, sizeof(double));
     *error = 1.0;
 
     bool isGraphCreated = false;
-    cudaStream_t stream, memoryStream;
+    cudaStream_t stream;
     cudaStreamCreate(&stream);
-    cudaStreamCreate(&memoryStream);
     cudaGraph_t graph;
     cudaGraphExec_t instance;
-
 ////////////////////////////////////////////////////////////////////////////
 //максимальный размер блока - 1024, расчет размера блока в зависимости от GPU, в blockSize будет лежать оптимальный размер сетки
 ////////////////////////////////////////////////////////////////////////////
@@ -148,7 +175,7 @@ int main(int argc, char** argv) {
         {
             cudaGraphLaunch(instance, stream);
 
-            cudaMemcpyAsync(&error_matrix, device_error, sizeof(double), cudaMemcpyDeviceToHost, memoryStream);
+            cudaMemcpyAsync(error, device_error, sizeof(double), cudaMemcpyDeviceToHost, stream);
 
             cudaStreamSynchronize(stream);
 
@@ -160,21 +187,18 @@ int main(int argc, char** argv) {
         else
         {
             cudaStreamBeginCapture(stream, cudaStreamCaptureModeGlobal);
-            for(size_t i = 0; i < 100; i++)
+            for(size_t i = 0; i < 50; i++)
             {
                 heat_equation<<<gridDim, blockDim, 0, stream>>>(Matrix, MatrixNew, size);
-                k++;
-
+                heat_equation<<<gridDim, blockDim, 0, stream>>>(MatrixNew, Matrix, size);
             }
             ////////////////////////////////////////////////////////////////////////////
             //вызов нахождения ошибки на устройстве с тем же размером сетки и блока
             ////////////////////////////////////////////////////////////////////////////
-            get_error<<<gridSize, blockSize, 0, stream>>>(Matrix, MatrixNew, Error);
-            cub::DeviceReduce::Max(error_temp, temp_size, error_matrix, device_error, realsize);
+            get_error<<<threads * blocks * blocks, threads, 0, stream>>>(Matrix, MatrixNew, error_matrix, size);
+            cub::DeviceReduce::Max(error_temp, temp_size, error_matrix, device_error, realsize, stream);
 
-            double* temp = Matrix;
-            Matrix = MatrixNew;
-            MatrixNew = temp;
+//           std::swap(Matrix, MatrixNew);
 
             cudaStreamEndCapture(stream, &graph);
             cudaGraphInstantiate(&instance, graph, NULL, NULL, 0);
@@ -199,7 +223,6 @@ int main(int argc, char** argv) {
     cudaFree(arr_new);
 
     cudaStreamDestroy(stream);
-    cudaStreamDestroy(memoryStream);
     cudaGraphDestroy(graph);
 
     return 0;
